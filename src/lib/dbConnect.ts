@@ -11,15 +11,15 @@ interface MongooseCache {
   promise: Promise<typeof mongoose> | null;
 }
 
-// Prevent TypeScript errors regarding the global scope
 declare global {
   var mongoose: MongooseCache | undefined;
 }
 
-let cached = global.mongoose;
+// Fallback logic to guarantee 'cached' is never inferred as undefined by TypeScript
+let cached = global.mongoose || { conn: null, promise: null };
 
-if (!cached) {
-  cached = global.mongoose = { conn: null, promise: null };
+if (!global.mongoose) {
+  global.mongoose = cached;
 }
 
 async function dbConnect() {

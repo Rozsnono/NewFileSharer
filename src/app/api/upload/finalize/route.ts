@@ -55,9 +55,9 @@ export async function POST(request: Request) {
             writeStream.write(chunkBuffer);
         }
 
-        // Finalize writing
+        // Finalize writing with explicit types to resolve implicit 'any' error
         await new Promise<void>((resolve, reject) => {
-            writeStream.end((err) => {
+            writeStream.end((err: Error | null | undefined) => {
                 if (err) reject(err);
                 else resolve();
             });

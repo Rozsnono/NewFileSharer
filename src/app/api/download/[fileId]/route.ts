@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server';
-import { Readable } from 'stream';
 import dbConnect from '@/lib/dbConnect';
 import { findLinkByToken } from '@/lib/authHelper';
 import { webdavClient } from '@/lib/webdav';
@@ -92,15 +91,29 @@ export async function GET(request: Request, { params }: RouteParams) {
         }
 
         // 7. Obtain streaming client from WebDAV
-        // We create a Node.js Readable stream from the WebDAV client
         const nodeStream = webdavClient.createReadStream(file.webdavPath);
 
-        // Convert Node.js Stream to modern Web Standard ReadableStream
-        const webStream = Readable.toWeb(nodeStream);
+        // 8. Manually wrap the Node.js Stream in a Web Standard ReadableStream
+        // This resolves the TypeScript definition mismatch between DOM types and Node types
+        const webStream = new ReadableStream({
+            start(controller) {
+                nodeStream.on('data', (chunk) => {
+                    controller.enqueue(chunk);
+                });
+                nodeStream.on('end', () => {
+                    controller.close();
+                });
+                nodeStream.on('error', (err) => {
+                    controller.error(err);
+                });
+            },
+            cancel() {
+                nodeStream.destroy();
+            }
+        });
 
         // Prepare attachment and metadata response headers
         const headers = new Headers();
-        // Use encodeURIComponent to correctly handle special characters in the filename
         const sanitizedFilename = encodeURIComponent(file.originalName);
 
         headers.set('Content-Disposition', `attachment; filename*=UTF-8''${sanitizedFilename}`);
