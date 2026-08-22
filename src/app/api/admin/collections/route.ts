@@ -9,7 +9,7 @@ export async function GET() {
     await dbConnect();
     const cookieStore = await cookies();
     const session = cookieStore.get('admin_session')?.value;
-    if (!verifySession(session)) {
+    if (!(await verifySession(session))) {
         return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
@@ -21,6 +21,8 @@ export async function GET() {
             return {
                 ...col,
                 id: col._id.toString(),
+                isPublic: col.isPublic || false,
+                publicExpiresAt: col.publicExpiresAt ? col.publicExpiresAt.toISOString() : null,
                 files: files.map(f => ({
                     id: f._id.toString(),
                     originalName: f.originalName,

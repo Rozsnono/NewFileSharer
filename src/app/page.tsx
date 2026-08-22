@@ -1,69 +1,139 @@
-import Image from "next/image";
+import React from 'react';
+import dbConnect from '@/lib/dbConnect';
+import ContentCollection from '@/models/ContentCollection';
+import Content from '@/models/Content';
+import { Download, FileIcon, Shield, Database, Clock } from 'lucide-react';
 
-export default function Home() {
+export const revalidate = 0; // Disable caching to fetch live public files on load
+
+export default async function HomePage() {
+  await dbConnect();
+
+  // Find public, non-expired collections
+  const publicCollections = await ContentCollection.find({
+    isPublic: true,
+    publicExpiresAt: { $gt: new Date() }
+  }).sort({ createdAt: -1 }).lean();
+
+  const collectionsWithFiles = await Promise.all(
+    publicCollections.map(async (col) => {
+      const files = await Content.find({ contentCollectionId: col._id }).sort({ createdAt: -1 }).lean();
+      return {
+        id: col._id.toString(),
+        name: col.name || 'Public Share',
+        expiresAt: col.publicExpiresAt ? new Date(col.publicExpiresAt) : null,
+        files: files.map(file => ({
+          id: file._id.toString(),
+          name: file.originalName,
+          size: file.size,
+          mimeType: file.mimeType
+        }))
+      };
+    })
+  );
+
+  const formatBytes = (bytes: number) => {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  };
+
+  const hasPublicFiles = collectionsWithFiles.some(c => c.files.length > 0);
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col justify-between">
+      {/* Navigation */}
+      <nav className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-6 py-4 shadow-sm">
+        <div className="max-w-6xl mx-auto flex justify-between items-center">
+          <div className="flex items-center gap-2">
+            <Shield className="h-6 w-6 text-blue-600 animate-pulse" />
+            <span className="font-bold tracking-tight">Core Storage Share</span>
+          </div>
           <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+            href="/admin"
+            className="text-xs bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 px-3.5 py-2 rounded-lg font-semibold transition"
           >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
+            Admin Panel
           </a>
         </div>
+      </nav>
+
+      {/* Main Content */}
+      <main className="max-w-4xl w-full mx-auto p-6 flex-grow flex flex-col justify-center py-12">
+        {!hasPublicFiles ? (
+          /* Landing Screen when no Public Collections exist */
+          <div className="text-center space-y-4 max-w-md mx-auto">
+            <div className="inline-flex p-4 bg-blue-50 dark:bg-blue-950/20 text-blue-600 rounded-full">
+              <Database className="h-8 w-8" />
+            </div>
+            <h1 className="text-2xl font-bold tracking-tight">Secure Private Storage</h1>
+            <p className="text-sm text-slate-500 dark:text-slate-400">
+              This node is operating in private sharing mode. Files can only be accessed using unique, encrypted transfer links generated by the system administrator.
+            </p>
+          </div>
+        ) : (
+          /* Public Download Lists */
+          <div className="space-y-8">
+            <div className="text-center md:text-left">
+              <h1 className="text-2xl font-bold tracking-tight">Active Public Assets</h1>
+              <p className="text-sm text-slate-500 mt-1">
+                The collections below have been authorized for temporary public access.
+              </p>
+            </div>
+
+            <div className="space-y-6">
+              {collectionsWithFiles.map((col) => {
+                if (col.files.length === 0) return null;
+                return (
+                  <div key={col.id} className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden shadow-sm">
+                    {/* Folder Header */}
+                    <div className="bg-slate-50 dark:bg-slate-800/50 px-6 py-4 border-b border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <h3 className="font-bold text-slate-900 dark:text-slate-100">{col.name}</h3>
+                      {col.expiresAt && (
+                        <span className="flex items-center gap-1 text-[11px] text-yellow-600 font-semibold">
+                          <Clock className="h-3 w-3" />
+                          Expires: {col.expiresAt.toLocaleString()}
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Files List */}
+                    <div className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {col.files.map((file) => (
+                        <div key={file.id} className="px-6 py-4 flex items-center justify-between gap-4">
+                          <div className="flex items-center gap-3 min-w-0">
+                            <FileIcon className="h-8 w-8 text-blue-500 shrink-0" />
+                            <div className="min-w-0">
+                              <p className="text-sm font-medium truncate text-slate-950 dark:text-slate-50">
+                                {file.name}
+                              </p>
+                              <p className="text-xs text-slate-500">{formatBytes(file.size)}</p>
+                            </div>
+                          </div>
+                          <a
+                            href={`/api/download/${file.id}`}
+                            className="flex items-center gap-1 bg-blue-600 hover:bg-blue-700 text-white px-3.5 py-2 rounded-lg text-xs font-semibold transition"
+                          >
+                            <Download className="h-3.5 w-3.5" />
+                            Download
+                          </a>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </main>
+
+      {/* Footer */}
+      <footer className="text-center py-6 text-xs text-slate-400 border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
+        <p>© {new Date().getFullYear()} Core Storage Node. All Transfers Stream Encrypted.</p>
+      </footer>
     </div>
   );
 }
