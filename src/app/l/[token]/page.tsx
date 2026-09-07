@@ -153,6 +153,7 @@ export default async function LinkLandingPage({ params }: PageProps) {
                                     {/* File Uploader component */}
                                     <FileUploader
                                         linkToken={token}
+                                        collectionId={link.contentCollectionId.toString()}
                                         availableBytesToUpload={link.availableBytesToUpload}
                                     />
                                 </div>

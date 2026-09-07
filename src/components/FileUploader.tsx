@@ -5,6 +5,7 @@ import { Upload, File as FileIcon, X, CheckCircle2, Loader2, AlertCircle } from 
 
 interface FileUploaderProps {
     linkToken: string;
+    collectionId: string;
     availableBytesToUpload: number;
     onUploadSuccess?: () => void;
 }
@@ -18,10 +19,13 @@ interface UploadingFile {
     errorMessage?: string;
 }
 
-const CHUNK_SIZE = 3 * 1024 * 1024; // 3MB chunks (well under Vercel's 4.5MB limit)
+const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB chunks
+const UPLOAD_API_URL = process.env.NEXT_PUBLIC_UPLOAD_API_URL || 'https://api.filesharer.rozsnorbert.hu';
+const UPLOAD_API_KEY = process.env.NEXT_PUBLIC_UPLOAD_API_KEY || '';
 
 export default function FileUploader({
     linkToken,
+    collectionId,
     availableBytesToUpload,
     onUploadSuccess,
 }: FileUploaderProps) {
@@ -36,9 +40,9 @@ export default function FileUploader({
     const handleDrag = (e: React.DragEvent) => {
         e.preventDefault();
         e.stopPropagation();
-        if (e.type === "dragenter" || e.type === "dragover") {
+        if (e.type === 'dragenter' || e.type === 'dragover') {
             setDragActive(true);
-        } else if (e.type === "dragleave") {
+        } else if (e.type === 'dragleave') {
             setDragActive(false);
         }
     };
@@ -70,85 +74,175 @@ export default function FileUploader({
 
         setFiles((prev) => [...prev, ...newFiles]);
 
-        // Sequentially process each file upload
+        // Process files sequentially or in parallel
         selectedFiles.forEach((file, index) => {
-            uploadFileInChunks(file, newFiles[index].id);
+            uploadFile(file, newFiles[index].id);
         });
     };
 
-    const uploadFileInChunks = async (file: File, uploadId: string) => {
-        const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+    const uploadFile = async (file: File, clientFileId: string) => {
+        const totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
+        const targetPath = `/uploads/${collectionId}`;
 
         // Check local upload limit
         if (file.size > availableBytesToUpload) {
-            updateFileStatus(uploadId, {
+            updateFileStatus(clientFileId, {
                 status: 'error',
                 errorMessage: 'File size exceeds available storage quota.',
             });
             return;
         }
 
-        updateFileStatus(uploadId, { status: 'uploading', progress: 0 });
+        updateFileStatus(clientFileId, { status: 'uploading', progress: 0 });
+
+        let remoteUploadId: string | null = null;
 
         try {
-            // 1. Send Chunks sequentially
+            // 1. Start Upload Session on the dedicated Upload API
+            const startResponse = await fetch(`${UPLOAD_API_URL}/upload/start`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-api-key': UPLOAD_API_KEY,
+                },
+                body: JSON.stringify({
+                    filename: file.name,
+                    totalChunks,
+                    chunkSize: CHUNK_SIZE,
+                    targetPath,
+                }),
+            });
+
+            if (!startResponse.ok) {
+                const startData = await startResponse.json().catch(() => ({}));
+                throw new Error(startData.message || startData.error || `Upload start failed (${startResponse.status})`);
+            }
+
+            const startData = await startResponse.json();
+            remoteUploadId = startData.uploadId;
+
+            // 2. Upload Chunks sequentially with retry mechanism
             for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
                 const start = chunkIndex * CHUNK_SIZE;
                 const end = Math.min(start + CHUNK_SIZE, file.size);
-                const chunk = file.slice(start, end);
+                const chunkBlob = file.slice(start, end);
 
                 const formData = new FormData();
-                formData.append('linkToken', linkToken);
-                formData.append('fileId', uploadId);
+                formData.append('file', chunkBlob, file.name);
+                formData.append('uploadId', remoteUploadId!);
                 formData.append('chunkIndex', chunkIndex.toString());
-                formData.append('chunk', chunk, file.name);
+                formData.append('totalChunks', totalChunks.toString());
+                formData.append('filename', file.name);
 
-                const response = await fetch('/api/upload/chunk', {
-                    method: 'POST',
-                    body: formData,
-                });
+                let chunkUploaded = false;
+                let chunkError = '';
 
-                if (!response.ok) {
-                    const resData = await response.json();
-                    throw new Error(resData.error || `Failed uploading chunk ${chunkIndex + 1}/${totalChunks}`);
+                // Try uploading chunk up to 3 times
+                for (let attempt = 1; attempt <= 3; attempt++) {
+                    try {
+                        const chunkResponse = await fetch(`${UPLOAD_API_URL}/upload/chunk`, {
+                            method: 'POST',
+                            headers: {
+                                'x-api-key': UPLOAD_API_KEY,
+                            },
+                            body: formData,
+                        });
+
+                        if (chunkResponse.ok) {
+                            chunkUploaded = true;
+                            break;
+                        } else {
+                            const errData = await chunkResponse.json().catch(() => ({}));
+                            chunkError = errData.message || errData.error || `HTTP ${chunkResponse.status}`;
+                        }
+                    } catch (netErr) {
+                        chunkError = (netErr as Error).message;
+                    }
+
+                    // Exponential wait before retrying chunk
+                    if (attempt < 3) {
+                        await new Promise((resolve) => setTimeout(resolve, attempt * 1000));
+                    }
                 }
 
-                // Calculate progress based on chunk completion
-                const percentComplete = Math.round(((chunkIndex + 1) / totalChunks) * 90); // Cap chunk progress at 90%
-                updateFileStatus(uploadId, { progress: percentComplete });
+                if (!chunkUploaded) {
+                    throw new Error(`Failed uploading chunk ${chunkIndex + 1}/${totalChunks}: ${chunkError}`);
+                }
+
+                // Progress calculated smoothly up to 90%
+                const percent = Math.round(((chunkIndex + 1) / totalChunks) * 90);
+                updateFileStatus(clientFileId, { progress: percent });
             }
 
-            // 2. Trigger Finalize & Merge on NAS
-            updateFileStatus(uploadId, { status: 'finalizing', progress: 95 });
+            // 3. Finalize & Stream Merge on WebDAV
+            updateFileStatus(clientFileId, { status: 'finalizing', progress: 95 });
 
-            const finalizeResponse = await fetch('/api/upload/finalize', {
+            const finishResponse = await fetch(`${UPLOAD_API_URL}/upload/finish`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-api-key': UPLOAD_API_KEY,
+                },
+                body: JSON.stringify({
+                    uploadId: remoteUploadId,
+                    totalChunks,
+                    filename: file.name,
+                    targetPath,
+                }),
+            });
+
+            if (!finishResponse.ok) {
+                const finishData = await finishResponse.json().catch(() => ({}));
+                throw new Error(finishData.message || finishData.error || `Finalize merge failed (${finishResponse.status})`);
+            }
+
+            const finishData = await finishResponse.json();
+            const destinationPath = finishData.destination || `${targetPath}/${file.name}`;
+
+            // 4. Record file metadata in Next.js MongoDB & deduct quota
+            const recordResponse = await fetch('/api/upload/record', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
                     linkToken,
-                    fileId: uploadId,
                     originalName: file.name,
                     mimeType: file.type || 'application/octet-stream',
                     totalSize: file.size,
-                    totalChunks,
+                    webdavPath: destinationPath,
                 }),
             });
 
-            if (!finalizeResponse.ok) {
-                const finalizeData = await finalizeResponse.json();
-                throw new Error(finalizeData.error || 'Failed finalizing upload merge.');
+            if (!recordResponse.ok) {
+                const recordData = await recordResponse.json().catch(() => ({}));
+                throw new Error(recordData.error || 'Failed saving metadata to database');
             }
 
-            updateFileStatus(uploadId, { status: 'completed', progress: 100 });
+            updateFileStatus(clientFileId, { status: 'completed', progress: 100 });
 
             if (onUploadSuccess) {
                 onUploadSuccess();
             }
         } catch (error) {
             const err = error as Error;
-            updateFileStatus(uploadId, {
+
+            // Trigger remote abort & cleanup if upload session was created
+            if (remoteUploadId) {
+                fetch(`${UPLOAD_API_URL}/upload/failed`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-api-key': UPLOAD_API_KEY,
+                    },
+                    body: JSON.stringify({
+                        uploadId: remoteUploadId,
+                        filename: file.name,
+                    }),
+                }).catch(() => {});
+            }
+
+            updateFileStatus(clientFileId, {
                 status: 'error',
                 errorMessage: err.message,
             });
@@ -182,10 +276,11 @@ export default function FileUploader({
                 onDragLeave={handleDrag}
                 onDrop={handleDrop}
                 onClick={() => fileInputRef.current?.click()}
-                className={`relative flex flex-col items-center justify-center border-2 border-dashed rounded-lg p-8 cursor-pointer transition-colors duration-200 ${dragActive
+                className={`relative flex flex-col items-center justify-center border-2 border-dashed rounded-lg p-8 cursor-pointer transition-colors duration-200 ${
+                    dragActive
                         ? 'border-blue-500 bg-blue-50/50 dark:bg-blue-950/20'
                         : 'border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50 hover:bg-slate-100 dark:hover:bg-slate-900'
-                    }`}
+                }`}
             >
                 <input
                     ref={fileInputRef}
@@ -199,7 +294,7 @@ export default function FileUploader({
                     Drag and drop your files here, or <span className="text-blue-500 underline">browse</span>
                 </p>
                 <p className="text-xs text-slate-500 mt-1 text-center">
-                    Files are secure and streamed straight to local storage. Max limit per file: {formatBytes(availableBytesToUpload)}.
+                    Files are uploaded directly to fast storage. Max limit per file: {formatBytes(availableBytesToUpload)}.
                 </p>
             </div>
 
@@ -230,7 +325,7 @@ export default function FileUploader({
                                         )}
                                         {file.status === 'finalizing' && (
                                             <span className="text-xs text-yellow-600 flex items-center gap-1">
-                                                <Loader2 className="h-3 w-3 animate-spin" /> Finalizing on NAS...
+                                                <Loader2 className="h-3 w-3 animate-spin" /> Finalizing on WebDAV...
                                             </span>
                                         )}
                                         {file.status === 'completed' && (
@@ -260,14 +355,15 @@ export default function FileUploader({
                                         <div className="w-full bg-slate-100 dark:bg-slate-800 h-1.5 rounded-full overflow-hidden">
                                             <div
                                                 style={{ width: `${file.progress}%` }}
-                                                className={`h-full transition-all duration-300 rounded-full ${file.status === 'error'
+                                                className={`h-full transition-all duration-300 rounded-full ${
+                                                    file.status === 'error'
                                                         ? 'bg-red-500'
                                                         : file.status === 'finalizing'
                                                             ? 'bg-yellow-500'
                                                             : file.status === 'completed'
                                                                 ? 'bg-emerald-500'
                                                                 : 'bg-blue-500'
-                                                    }`}
+                                                }`}
                                             />
                                         </div>
                                         {file.errorMessage && (
