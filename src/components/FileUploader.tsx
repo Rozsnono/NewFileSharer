@@ -20,7 +20,7 @@ interface UploadingFile {
 }
 
 const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB chunks
-const UPLOAD_API_URL = process.env.NEXT_PUBLIC_UPLOAD_API_URL || 'https://api.filesharer.rozsnorbert.hu';
+const UPLOAD_API_URL = process.env.NEXT_PUBLIC_UPLOAD_API_URL || 'http://api.filesharer.rozsnorbert.hu:9443';
 const UPLOAD_API_KEY = process.env.NEXT_PUBLIC_UPLOAD_API_KEY || '';
 
 export default function FileUploader({
