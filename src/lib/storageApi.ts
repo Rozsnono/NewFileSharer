@@ -14,10 +14,10 @@ export function getStorageApiUrl(): string {
     let url =
         process.env.UPLOAD_API_URL ||
         process.env.NEXT_PUBLIC_UPLOAD_API_URL ||
-        'http://api.filesharer.rozsnorbert.hu:9443';
+        'https://api.filesharer.rozsnorbert.hu:9443';
     url = url.trim().replace(/\/+$/, '');
-    if (url.includes(':9443') && url.startsWith('https://')) {
-        url = url.replace(/^https:\/\//, 'http://');
+    if (url.startsWith('http://') && url.includes('api.filesharer.rozsnorbert.hu')) {
+        url = url.replace(/^http:\/\//, 'https://');
     }
     return url;
 }

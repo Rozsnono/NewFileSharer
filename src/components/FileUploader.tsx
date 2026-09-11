@@ -19,24 +19,24 @@ interface UploadingFile {
     errorMessage?: string;
 }
 
-// 3.5MB chunk size: fits safely within Vercel's 4.5MB payload limit while maximizing transfer speed
-const CHUNK_SIZE = Math.floor(3.5 * 1024 * 1024);
+// 20MB chunk size: maximizes upload throughput directly to Synology NAS over HTTPS
+const CHUNK_SIZE = 20 * 1024 * 1024;
 const UPLOAD_API_KEY = process.env.NEXT_PUBLIC_UPLOAD_API_KEY || '';
 
 /**
- * Resolves the upload endpoint safely.
- * When running in a browser over HTTPS (e.g. Vercel deployment),
- * always route through the same-origin Next.js /api/storage proxy gateway.
- * This completely avoids:
- * 1. (blocked:mixed-content) when accessing http://api.filesharer.rozsnorbert.hu:9443
- * 2. net::ERR_SSL_PROTOCOL_ERROR when accessing https://api.filesharer.rozsnorbert.hu:9443 (since port 9443 is plain HTTP)
+ * Resolves the upload endpoint.
+ * Points directly to the high-performance Synology NAS HTTPS endpoint.
  */
 function resolveUploadApiUrl(): string {
-    if (typeof window !== 'undefined' && window.location.protocol === 'https:') {
-        return '/api/storage';
+    let configured = (process.env.NEXT_PUBLIC_UPLOAD_API_URL || '').trim();
+    if (!configured) {
+        configured = 'https://api.filesharer.rozsnorbert.hu:9443';
     }
-    const configured = (process.env.NEXT_PUBLIC_UPLOAD_API_URL || '').trim();
-    return configured || '/api/storage';
+    // Upgrade http:// to https:// when on an HTTPS page
+    if (typeof window !== 'undefined' && window.location.protocol === 'https:' && configured.startsWith('http://')) {
+        configured = configured.replace(/^http:\/\//, 'https://');
+    }
+    return configured;
 }
 
 export default function FileUploader({
