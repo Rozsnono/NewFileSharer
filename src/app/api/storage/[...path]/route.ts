@@ -1,10 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-const UPLOAD_API_URL = (
-    process.env.UPLOAD_API_URL ||
-    process.env.NEXT_PUBLIC_UPLOAD_API_URL ||
-    'http://api.filesharer.rozsnorbert.hu:9443'
-).replace(/\/+$/, '');
+function getTargetBaseUrl(): string {
+    let url = (
+        process.env.UPLOAD_API_URL ||
+        process.env.NEXT_PUBLIC_UPLOAD_API_URL ||
+        'http://api.filesharer.rozsnorbert.hu:9443'
+    ).trim().replace(/\/+$/, '');
+
+    // Port 9443 on the Synology NAS runs plain HTTP. If configured with https://,
+    // normalize to http:// to prevent SSL protocol handshake failures.
+    if (url.includes(':9443') && url.startsWith('https://')) {
+        url = url.replace(/^https:\/\//, 'http://');
+    }
+
+    return url;
+}
 
 const UPLOAD_API_KEY =
     process.env.UPLOAD_API_KEY ||
@@ -18,11 +28,10 @@ async function handleProxy(request: NextRequest, { params }: { params: Promise<{
     const { path } = await params;
     const subPath = path.join('/');
 
-    // Build remote destination URL
+    const baseUrl = getTargetBaseUrl();
     const search = request.nextUrl.search;
-    const targetUrl = `${UPLOAD_API_URL}/${subPath}${search}`;
+    let targetUrl = `${baseUrl}/${subPath}${search}`;
 
-    // Prepare headers for remote call
     const forwardHeaders: Record<string, string> = {
         'x-api-key': UPLOAD_API_KEY,
     };
@@ -38,18 +47,35 @@ async function handleProxy(request: NextRequest, { params }: { params: Promise<{
     }
 
     try {
-        const fetchOptions: RequestInit = {
-            method: request.method,
-            headers: forwardHeaders,
-        };
-
-        // Forward body for non-GET/HEAD methods
+        let bodyBuffer: Buffer | undefined;
         if (request.method !== 'GET' && request.method !== 'HEAD') {
-            const bodyBuffer = await request.arrayBuffer();
-            fetchOptions.body = Buffer.from(bodyBuffer);
+            const ab = await request.arrayBuffer();
+            bodyBuffer = Buffer.from(ab);
         }
 
-        const remoteResponse = await fetch(targetUrl, fetchOptions);
+        const makeCall = async (url: string) => {
+            const fetchOptions: RequestInit = {
+                method: request.method,
+                headers: forwardHeaders,
+            };
+            if (bodyBuffer) {
+                fetchOptions.body = bodyBuffer as unknown as BodyInit;
+            }
+            return fetch(url, fetchOptions);
+        };
+
+        let remoteResponse: Response;
+        try {
+            remoteResponse = await makeCall(targetUrl);
+        } catch (initialErr) {
+            // If failed on https, retry with http
+            if (targetUrl.startsWith('https://')) {
+                targetUrl = targetUrl.replace(/^https:\/\//, 'http://');
+                remoteResponse = await makeCall(targetUrl);
+            } else {
+                throw initialErr;
+            }
+        }
 
         // Forward response headers back to client
         const responseHeaders = new Headers();
@@ -76,12 +102,14 @@ async function handleProxy(request: NextRequest, { params }: { params: Promise<{
             headers: responseHeaders,
         });
     } catch (error) {
-        const err = error as Error;
-        console.error(`[Storage Proxy Error] Failed calling ${targetUrl}:`, err.message);
+        const err = error as any;
+        console.error(`[Storage Proxy Error] Failed calling ${targetUrl}:`, err.message, err.cause);
         return NextResponse.json(
             {
                 error: 'Storage Gateway Error',
                 message: `Failed communicating with remote storage API: ${err.message}`,
+                targetUrl,
+                cause: err.cause?.message || String(err.cause || ''),
             },
             { status: 502 }
         );

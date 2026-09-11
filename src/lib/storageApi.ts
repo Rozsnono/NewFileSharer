@@ -11,11 +11,15 @@
  * Returns the base URL of the dedicated Synology Storage API.
  */
 export function getStorageApiUrl(): string {
-    const url =
+    let url =
         process.env.UPLOAD_API_URL ||
         process.env.NEXT_PUBLIC_UPLOAD_API_URL ||
         'http://api.filesharer.rozsnorbert.hu:9443';
-    return url.replace(/\/+$/, '');
+    url = url.trim().replace(/\/+$/, '');
+    if (url.includes(':9443') && url.startsWith('https://')) {
+        url = url.replace(/^https:\/\//, 'http://');
+    }
+    return url;
 }
 
 /**
