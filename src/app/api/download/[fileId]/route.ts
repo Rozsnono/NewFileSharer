@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import dbConnect from '@/lib/dbConnect';
 import { findLinkByToken } from '@/lib/authHelper';
-import { webdavClient } from '@/lib/webdav';
+import { buildDirectDownloadUrl } from '@/lib/storageApi';
 import Content from '@/models/Content';
 import ContentCollection from '@/models/ContentCollection';
 import Log from '@/models/Log';
@@ -16,6 +16,7 @@ export async function GET(request: Request, { params }: RouteParams) {
     const { fileId } = await params;
     const { searchParams } = new URL(request.url);
     const token = searchParams.get('token');
+    const inline = searchParams.get('inline') === 'true';
 
     try {
         // 1. Fetch file and populate collection to check public accessibility
@@ -41,7 +42,7 @@ export async function GET(request: Request, { params }: RouteParams) {
                 await Log.create({
                     level: 'warning',
                     message: 'Download attempt failed: Missing link token parameter on private file.',
-                    details: { fileId }
+                    details: { fileId },
                 });
                 return new Response('Missing link authorization token', { status: 400 });
             }
@@ -52,7 +53,7 @@ export async function GET(request: Request, { params }: RouteParams) {
                 await Log.create({
                     level: 'warning',
                     message: 'Download attempt failed: Invalid or expired token.',
-                    details: { fileId, tokenExcerpt: token.substring(0, 8) + '...' }
+                    details: { fileId, tokenExcerpt: token.substring(0, 8) + '...' },
                 });
                 return new Response('Unauthorized or expired link', { status: 401 });
             }
@@ -62,7 +63,7 @@ export async function GET(request: Request, { params }: RouteParams) {
                 await Log.create({
                     level: 'warning',
                     message: 'Download attempt failed: Link is configured as upload-only.',
-                    details: { fileId, linkId: link._id }
+                    details: { fileId, linkId: link._id },
                 });
                 return new Response('This link is upload-only', { status: 403 });
             }
@@ -72,7 +73,11 @@ export async function GET(request: Request, { params }: RouteParams) {
                 await Log.create({
                     level: 'warning',
                     message: 'Security warning: Download content collection mismatch.',
-                    details: { fileId, expectedCollection: link.contentCollectionId, actualCollection: file.contentCollectionId._id }
+                    details: {
+                        fileId,
+                        expectedCollection: link.contentCollectionId,
+                        actualCollection: file.contentCollectionId._id,
+                    },
                 });
                 return new Response('Unauthorized collection access', { status: 403 });
             }
@@ -89,58 +94,31 @@ export async function GET(request: Request, { params }: RouteParams) {
             }
         }
 
-        // 3. Ensure file physically exists on WebDAV NAS
-        const fileExistsOnNAS = await webdavClient.exists(file.webdavPath);
-        if (!fileExistsOnNAS) {
-            await Log.create({
-                level: 'error',
-                message: `File missing on NAS storage: ${file.webdavPath}`,
-                details: { fileId }
-            });
-            return new Response('File missing on storage server', { status: 500 });
-        }
-
-        // 4. Obtain streaming client from WebDAV
-        const nodeStream = webdavClient.createReadStream(file.webdavPath);
-
-        // 5. Manually wrap the Node.js Stream in a Web Standard ReadableStream
-        const webStream = new ReadableStream({
-            start(controller) {
-                nodeStream.on('data', (chunk) => {
-                    controller.enqueue(chunk);
-                });
-                nodeStream.on('end', () => {
-                    controller.close();
-                });
-                nodeStream.on('error', (err) => {
-                    controller.error(err);
-                });
+        // 3. Log successful authorized download dispatch
+        await Log.create({
+            level: 'info',
+            message: `Dispatched direct download for: ${file.originalName}`,
+            details: {
+                fileId,
+                originalName: file.originalName,
+                webdavPath: file.webdavPath,
+                isCurrentlyPublic,
+                inline,
             },
-            cancel() {
-                nodeStream.destroy();
-            }
         });
 
-        // Prepare attachment and metadata response headers
-        const headers = new Headers();
-        const sanitizedFilename = encodeURIComponent(file.originalName);
+        // 4. Construct direct streaming download URL to NASiS3 and redirect browser
+        const directDownloadUrl = buildDirectDownloadUrl(file.webdavPath, { inline });
 
-        headers.set('Content-Disposition', `attachment; filename*=UTF-8''${sanitizedFilename}`);
-        headers.set('Content-Type', file.mimeType || 'application/octet-stream');
-        headers.set('Content-Length', file.size.toString());
-
-        return new Response(webStream, {
-            status: 200,
-            headers,
-        });
+        return NextResponse.redirect(directDownloadUrl, 307);
 
     } catch (error) {
         const err = error as Error;
         await Log.create({
             level: 'error',
-            message: `Failed to stream download: ${err.message}`,
-            details: { fileId, stack: err.stack }
+            message: `Failed to dispatch download: ${err.message}`,
+            details: { fileId, stack: err.stack },
         });
-        return new Response('Internal streaming error occurred', { status: 500 });
+        return new Response('Internal error occurred while processing download', { status: 500 });
     }
 }

@@ -2,7 +2,7 @@ import React from 'react';
 import dbConnect from '@/lib/dbConnect';
 import ContentCollection from '@/models/ContentCollection';
 import Content from '@/models/Content';
-import { Download, FileIcon, Shield, Database, Clock } from 'lucide-react';
+import { Download, Eye, FileIcon, Shield, Database, Clock } from 'lucide-react';
 
 export const revalidate = 0; // Disable caching to fetch live public files on load
 
@@ -112,13 +112,27 @@ export default async function HomePage() {
                               <p className="text-xs text-slate-500">{formatBytes(file.size)}</p>
                             </div>
                           </div>
-                          <a
-                            href={`/api/download/${file.id}`}
-                            className="flex items-center gap-1 bg-blue-600 hover:bg-blue-700 text-white px-3.5 py-2 rounded-lg text-xs font-semibold transition"
-                          >
-                            <Download className="h-3.5 w-3.5" />
-                            Download
-                          </a>
+                          <div className="shrink-0 flex items-center gap-2">
+                            {/\.(jpe?g|png|gif|webp|svg|mp4|webm|mov|mp3|wav|ogg|pdf|txt)$/i.test(file.name) && (
+                              <a
+                                href={`/api/download/${file.id}?inline=true`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                title="Preview file in browser"
+                                className="flex items-center gap-1 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 px-3 py-2 rounded-lg text-xs font-medium transition"
+                              >
+                                <Eye className="h-3.5 w-3.5" />
+                                <span>Preview</span>
+                              </a>
+                            )}
+                            <a
+                              href={`/api/download/${file.id}`}
+                              className="flex items-center gap-1 bg-blue-600 hover:bg-blue-700 text-white px-3.5 py-2 rounded-lg text-xs font-semibold transition shadow-sm"
+                            >
+                              <Download className="h-3.5 w-3.5" />
+                              <span>Download</span>
+                            </a>
+                          </div>
                         </div>
                       ))}
                     </div>

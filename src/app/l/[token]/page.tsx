@@ -5,7 +5,7 @@ import { findLinkByToken } from '@/lib/authHelper';
 import Content from '@/models/Content';
 import Log from '@/models/Log';
 import FileUploader from '@/components/FileUploader';
-import { Download, FileIcon, UploadCloud, ShieldAlert, Calendar, Database } from 'lucide-react';
+import { Download, Eye, FileIcon, UploadCloud, ShieldAlert, Calendar, Database } from 'lucide-react';
 import LinkRefreshWrapper from '@/components/LinkRefreshWrapper';
 
 interface PageProps {
@@ -127,14 +127,28 @@ export default async function LinkLandingPage({ params }: PageProps) {
                                                         <p className="text-xs text-slate-500">{formatBytes(file.size)}</p>
                                                     </div>
                                                 </div>
-                                                {/* Download Endpoint triggered with validation token */}
-                                                <a
-                                                    href={`/api/download/${file.id}?token=${token}`}
-                                                    className="shrink-0 flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 px-3 py-1.5 rounded-lg text-xs font-semibold transition"
-                                                >
-                                                    <Download className="h-3.5 w-3.5" />
-                                                    Download
-                                                </a>
+                                                {/* Action Buttons */}
+                                                <div className="shrink-0 flex items-center gap-2">
+                                                    {/\.(jpe?g|png|gif|webp|svg|mp4|webm|mov|mp3|wav|ogg|pdf|txt)$/i.test(file.originalName) && (
+                                                        <a
+                                                            href={`/api/download/${file.id}?token=${token}&inline=true`}
+                                                            target="_blank"
+                                                            rel="noopener noreferrer"
+                                                            title="Preview file in browser"
+                                                            className="flex items-center gap-1 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 px-2.5 py-1.5 rounded-lg text-xs font-medium transition"
+                                                        >
+                                                            <Eye className="h-3.5 w-3.5" />
+                                                            <span>Preview</span>
+                                                        </a>
+                                                    )}
+                                                    <a
+                                                        href={`/api/download/${file.id}?token=${token}`}
+                                                        className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition shadow-sm"
+                                                    >
+                                                        <Download className="h-3.5 w-3.5" />
+                                                        <span>Download</span>
+                                                    </a>
+                                                </div>
                                             </div>
                                         ))}
                                     </div>
