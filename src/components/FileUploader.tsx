@@ -19,9 +19,24 @@ interface UploadingFile {
     errorMessage?: string;
 }
 
-const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB chunks
-const UPLOAD_API_URL = process.env.NEXT_PUBLIC_UPLOAD_API_URL || 'http://api.filesharer.rozsnorbert.hu:9443';
+// 3.5MB chunk size: fits safely within Vercel's 4.5MB payload limit while maximizing transfer speed
+const CHUNK_SIZE = Math.floor(3.5 * 1024 * 1024);
 const UPLOAD_API_KEY = process.env.NEXT_PUBLIC_UPLOAD_API_KEY || '';
+
+/**
+ * Resolves the upload endpoint safely.
+ * If running in a browser over HTTPS and the configured URL is unencrypted HTTP,
+ * automatically routes through the same-origin /api/storage proxy to prevent (blocked:mixed-content).
+ */
+function resolveUploadApiUrl(): string {
+    const configured = (process.env.NEXT_PUBLIC_UPLOAD_API_URL || '').trim();
+    if (typeof window !== 'undefined' && window.location.protocol === 'https:') {
+        if (!configured || configured.startsWith('http://')) {
+            return '/api/storage';
+        }
+    }
+    return configured || '/api/storage';
+}
 
 export default function FileUploader({
     linkToken,
@@ -95,11 +110,12 @@ export default function FileUploader({
 
         updateFileStatus(clientFileId, { status: 'uploading', progress: 0 });
 
+        const uploadApiUrl = resolveUploadApiUrl();
         let remoteUploadId: string | null = null;
 
         try {
-            // 1. Start Upload Session on the dedicated Upload API
-            const startResponse = await fetch(`${UPLOAD_API_URL}/upload/start`, {
+            // 1. Start Upload Session on the dedicated Upload API (or same-origin proxy on HTTPS)
+            const startResponse = await fetch(`${uploadApiUrl}/upload/start`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -140,7 +156,7 @@ export default function FileUploader({
                 // Try uploading chunk up to 3 times
                 for (let attempt = 1; attempt <= 3; attempt++) {
                     try {
-                        const chunkResponse = await fetch(`${UPLOAD_API_URL}/upload/chunk`, {
+                        const chunkResponse = await fetch(`${uploadApiUrl}/upload/chunk`, {
                             method: 'POST',
                             headers: {
                                 'x-api-key': UPLOAD_API_KEY,
@@ -177,7 +193,7 @@ export default function FileUploader({
             // 3. Finalize & Stream Merge on WebDAV
             updateFileStatus(clientFileId, { status: 'finalizing', progress: 95 });
 
-            const finishResponse = await fetch(`${UPLOAD_API_URL}/upload/finish`, {
+            const finishResponse = await fetch(`${uploadApiUrl}/upload/finish`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -229,7 +245,7 @@ export default function FileUploader({
 
             // Trigger remote abort & cleanup if upload session was created
             if (remoteUploadId) {
-                fetch(`${UPLOAD_API_URL}/upload/failed`, {
+                fetch(`${uploadApiUrl}/upload/failed`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',

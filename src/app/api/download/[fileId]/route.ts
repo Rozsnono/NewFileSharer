@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import dbConnect from '@/lib/dbConnect';
 import { findLinkByToken } from '@/lib/authHelper';
-import { buildDirectDownloadUrl } from '@/lib/storageApi';
+import { buildDirectDownloadUrl, getStorageApiKey } from '@/lib/storageApi';
 import Content from '@/models/Content';
 import ContentCollection from '@/models/ContentCollection';
 import Log from '@/models/Log';
@@ -97,7 +97,7 @@ export async function GET(request: Request, { params }: RouteParams) {
         // 3. Log successful authorized download dispatch
         await Log.create({
             level: 'info',
-            message: `Dispatched direct download for: ${file.originalName}`,
+            message: `Dispatched download for: ${file.originalName}`,
             details: {
                 fileId,
                 originalName: file.originalName,
@@ -107,10 +107,48 @@ export async function GET(request: Request, { params }: RouteParams) {
             },
         });
 
-        // 4. Construct direct streaming download URL to NASiS3 and redirect browser
+        // 4. Construct direct streaming download URL
         const directDownloadUrl = buildDirectDownloadUrl(file.webdavPath, { inline });
 
-        return NextResponse.redirect(directDownloadUrl, 307);
+        // If target URL is already HTTPS, redirect client directly
+        if (directDownloadUrl.startsWith('https://')) {
+            return NextResponse.redirect(directDownloadUrl, 307);
+        }
+
+        // When remote target is on HTTP, stream directly through server to avoid browser insecure download blocking
+        const range = request.headers.get('range');
+        const forwardHeaders: Record<string, string> = {
+            'x-api-key': getStorageApiKey(),
+        };
+        if (range) {
+            forwardHeaders['range'] = range;
+        }
+
+        const remoteRes = await fetch(directDownloadUrl, {
+            headers: forwardHeaders,
+        });
+
+        const resHeaders = new Headers();
+        const copyHeaders = [
+            'content-type',
+            'content-length',
+            'content-disposition',
+            'content-range',
+            'accept-ranges',
+            'etag',
+            'last-modified',
+        ];
+
+        for (const h of copyHeaders) {
+            const v = remoteRes.headers.get(h);
+            if (v) resHeaders.set(h, v);
+        }
+
+        return new Response(remoteRes.body, {
+            status: remoteRes.status,
+            statusText: remoteRes.statusText,
+            headers: resHeaders,
+        });
 
     } catch (error) {
         const err = error as Error;
