@@ -25,16 +25,17 @@ const UPLOAD_API_KEY = process.env.NEXT_PUBLIC_UPLOAD_API_KEY || '';
 
 /**
  * Resolves the upload endpoint safely.
- * If running in a browser over HTTPS and the configured URL is unencrypted HTTP,
- * automatically routes through the same-origin /api/storage proxy to prevent (blocked:mixed-content).
+ * When running in a browser over HTTPS (e.g. Vercel deployment),
+ * always route through the same-origin Next.js /api/storage proxy gateway.
+ * This completely avoids:
+ * 1. (blocked:mixed-content) when accessing http://api.filesharer.rozsnorbert.hu:9443
+ * 2. net::ERR_SSL_PROTOCOL_ERROR when accessing https://api.filesharer.rozsnorbert.hu:9443 (since port 9443 is plain HTTP)
  */
 function resolveUploadApiUrl(): string {
-    const configured = (process.env.NEXT_PUBLIC_UPLOAD_API_URL || '').trim();
     if (typeof window !== 'undefined' && window.location.protocol === 'https:') {
-        if (!configured || configured.startsWith('http://')) {
-            return '/api/storage';
-        }
+        return '/api/storage';
     }
+    const configured = (process.env.NEXT_PUBLIC_UPLOAD_API_URL || '').trim();
     return configured || '/api/storage';
 }
 
