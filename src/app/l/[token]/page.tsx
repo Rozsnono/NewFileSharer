@@ -1,12 +1,14 @@
 import React from 'react';
-import { notFound } from 'next/navigation';
 import dbConnect from '@/lib/dbConnect';
 import { findLinkByToken } from '@/lib/authHelper';
 import Content from '@/models/Content';
 import Log from '@/models/Log';
 import FileUploader from '@/components/FileUploader';
-import { Download, Eye, FileIcon, UploadCloud, ShieldAlert, Calendar, Database } from 'lucide-react';
+import { Download, Eye, UploadCloud, ShieldAlert, Calendar, Database } from 'lucide-react';
 import LinkRefreshWrapper from '@/components/LinkRefreshWrapper';
+import SiteHeader from '@/components/SiteHeader';
+import FileTile from '@/components/FileTile';
+import { getI18n } from '@/lib/i18nServer';
 
 interface PageProps {
     params: Promise<{ token: string }>;
@@ -14,6 +16,8 @@ interface PageProps {
 
 export default async function LinkLandingPage({ params }: PageProps) {
     const { token } = await params;
+    const { lang, t } = await getI18n();
+    const locale = lang === 'hu' ? 'hu-HU' : 'en-GB';
 
     await dbConnect();
 
@@ -29,14 +33,15 @@ export default async function LinkLandingPage({ params }: PageProps) {
         });
 
         return (
-            <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950 p-4">
-                <div className="max-w-md w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-8 text-center space-y-4 shadow-sm">
-                    <ShieldAlert className="h-12 w-12 text-red-500 mx-auto" />
-                    <h1 className="text-xl font-bold text-slate-950 dark:text-slate-50">Link Expired or Not Found</h1>
-                    <p className="text-sm text-slate-500 dark:text-slate-400">
-                        This transfer link does not exist, has expired, or has reached its download limit. Please contact the sender to request a new link.
-                    </p>
-                </div>
+            <div className="flex min-h-screen flex-col">
+                <SiteHeader />
+                <main className="flex flex-grow items-center justify-center p-4">
+                    <div className="card w-full max-w-md space-y-4 p-8 text-center">
+                        <ShieldAlert className="mx-auto h-12 w-12 text-red-500" aria-hidden="true" />
+                        <h1 className="text-xl font-bold">{t('linkExpiredTitle')}</h1>
+                        <p className="text-[15px] leading-relaxed text-slate-600 dark:text-slate-400">{t('linkExpiredText')}</p>
+                    </div>
+                </main>
             </div>
         );
     }
@@ -56,9 +61,9 @@ export default async function LinkLandingPage({ params }: PageProps) {
     }));
 
     const formatBytes = (bytes: number) => {
-        if (bytes === 0) return '0 Bytes';
+        if (bytes === 0) return '0 B';
         const k = 1024;
-        const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+        const sizes = ['B', 'KB', 'MB', 'GB'];
         const i = Math.floor(Math.log(bytes) / Math.log(k));
         return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
     };
@@ -66,117 +71,118 @@ export default async function LinkLandingPage({ params }: PageProps) {
     const showDownloads = link.type === 'send' || link.type === 'share';
     const showUploads = link.type === 'receive' || link.type === 'share';
 
+    const title =
+        link.type === 'send' ? t('linkTitleSend') : link.type === 'receive' ? t('linkTitleReceive') : t('linkTitleShare');
+    const description =
+        link.type === 'send' ? t('linkDescSend') : link.type === 'receive' ? t('linkDescReceive') : t('linkDescShare');
+
     return (
         <LinkRefreshWrapper>
-            <div className="min-h-screen bg-slate-50 dark:bg-slate-950 py-12 px-4 sm:px-6">
-                <div className="max-w-4xl mx-auto space-y-8">
+            <div className="flex min-h-screen flex-col">
+                <SiteHeader />
 
-                    {/* Header Metadata */}
-                    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-6">
+                <main className="mx-auto w-full max-w-5xl flex-grow space-y-6 px-4 py-8 sm:px-6 sm:py-10">
+
+                    {/* Header metadata */}
+                    <section className="card flex flex-col justify-between gap-5 p-5 sm:p-7 md:flex-row md:items-center">
                         <div>
-                            <h1 className="text-2xl font-bold text-slate-950 dark:text-slate-50 capitalize">
-                                {link.type === 'send' ? 'File Download' : link.type === 'receive' ? 'Upload Request' : 'Shared Folder'}
-                            </h1>
-                            <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-                                {link.type === 'send'
-                                    ? 'The sender shared files for you to download.'
-                                    : link.type === 'receive'
-                                        ? 'The sender is requesting files from you.'
-                                        : 'You can upload files and download shared files.'}
-                            </p>
+                            <h1 className="text-2xl font-bold tracking-tight sm:text-[28px]">{title}</h1>
+                            <p className="mt-1.5 text-[15px] text-slate-600 dark:text-slate-400">{description}</p>
                         </div>
 
-                        <div className="flex flex-wrap gap-4 text-xs text-slate-500 dark:text-slate-400 border-t border-slate-100 dark:border-slate-800 pt-4 md:pt-0 md:border-none">
-                            <div className="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-800 px-3 py-1.5 rounded-full">
-                                <Calendar className="h-3.5 w-3.5" />
-                                <span>Expires: {new Date(link.availableTo).toLocaleDateString()}</span>
-                            </div>
+                        <div className="flex flex-wrap gap-2">
+                            <span className="badge badge-neutral">
+                                <Calendar className="h-3.5 w-3.5" aria-hidden="true" />
+                                {t('linkExpires', { date: new Date(link.availableTo).toLocaleDateString(locale) })}
+                            </span>
+                            {showDownloads && link.availableDownloads !== null && (
+                                <span className="badge badge-info">{t('linkDownloadsLeft', { n: link.availableDownloads })}</span>
+                            )}
                             {showUploads && (
-                                <div className="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-800 px-3 py-1.5 rounded-full">
-                                    <Database className="h-3.5 w-3.5" />
-                                    <span>Quota: {formatBytes(link.availableBytesToUpload)} of {formatBytes(link.maxBytesToUpload)}</span>
-                                </div>
+                                <span className="badge badge-neutral">
+                                    <Database className="h-3.5 w-3.5" aria-hidden="true" />
+                                    {t('linkQuota', {
+                                        left: formatBytes(link.availableBytesToUpload),
+                                        max: formatBytes(link.maxBytesToUpload),
+                                    })}
+                                </span>
                             )}
                         </div>
-                    </div>
+                    </section>
 
-                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                    <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
 
-                        {/* File Download View (send / share) */}
+                        {/* File download view (send / share) */}
                         {showDownloads && (
-                            <div className={`space-y-4 ${showUploads ? 'lg:col-span-7' : 'lg:col-span-12'}`}>
-                                <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-                                    <FileIcon className="h-5 w-5 text-slate-400" />
-                                    Shared Files ({files.length})
-                                </h2>
+                            <section className={showUploads ? 'lg:col-span-7' : 'lg:col-span-12'}>
+                                <div className="card overflow-hidden">
+                                    <h2 className="border-b border-slate-200 px-5 py-4 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:border-slate-800">
+                                        {t('sharedFiles', { n: files.length })}
+                                    </h2>
 
-                                {files.length === 0 ? (
-                                    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-8 text-center">
-                                        <p className="text-sm text-slate-500">No files uploaded yet.</p>
-                                    </div>
-                                ) : (
-                                    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden shadow-sm divide-y divide-slate-100 dark:divide-slate-800">
-                                        {files.map((file) => (
-                                            <div key={file.id} className="p-4 flex items-center justify-between gap-4">
-                                                <div className="min-w-0 flex items-center gap-3">
-                                                    <FileIcon className="h-8 w-8 text-blue-500 shrink-0" />
-                                                    <div className="min-w-0">
-                                                        <p className="text-sm font-medium text-slate-900 dark:text-slate-100 truncate">
-                                                            {file.originalName}
-                                                        </p>
-                                                        <p className="text-xs text-slate-500">{formatBytes(file.size)}</p>
+                                    {files.length === 0 ? (
+                                        <p className="p-8 text-center text-[15px] text-slate-500">{t('noFiles')}</p>
+                                    ) : (
+                                        <ul className="divide-y divide-slate-200 dark:divide-slate-800">
+                                            {files.map((file) => (
+                                                <li key={file.id} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+                                                    <div className="flex min-w-0 items-center gap-3">
+                                                        <FileTile name={file.originalName} />
+                                                        <div className="min-w-0">
+                                                            <p className="truncate text-[15px] font-semibold">{file.originalName}</p>
+                                                            <p className="text-sm text-slate-500">{formatBytes(file.size)}</p>
+                                                        </div>
                                                     </div>
-                                                </div>
-                                                {/* Action Buttons */}
-                                                <div className="shrink-0 flex items-center gap-2">
-                                                    {/\.(jpe?g|png|gif|webp|svg|mp4|webm|mov|mp3|wav|ogg|pdf|txt)$/i.test(file.originalName) && (
+                                                    {/* Action buttons */}
+                                                    <div className="flex shrink-0 items-center gap-2">
+                                                        {/\.(jpe?g|png|gif|webp|svg|mp4|webm|mov|mp3|wav|ogg|pdf|txt)$/i.test(file.originalName) && (
+                                                            <a
+                                                                href={`/api/download/${file.id}?token=${token}&inline=true`}
+                                                                target="_blank"
+                                                                rel="noopener noreferrer"
+                                                                className="btn btn-secondary flex-1 sm:flex-none"
+                                                            >
+                                                                <Eye className="h-4 w-4" aria-hidden="true" />
+                                                                {t('previewBtn')}
+                                                            </a>
+                                                        )}
                                                         <a
-                                                            href={`/api/download/${file.id}?token=${token}&inline=true`}
-                                                            target="_blank"
-                                                            rel="noopener noreferrer"
-                                                            title="Preview file in browser"
-                                                            className="flex items-center gap-1 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 px-2.5 py-1.5 rounded-lg text-xs font-medium transition"
+                                                            href={`/api/download/${file.id}?token=${token}`}
+                                                            className="btn btn-primary flex-1 sm:flex-none"
                                                         >
-                                                            <Eye className="h-3.5 w-3.5" />
-                                                            <span>Preview</span>
+                                                            <Download className="h-4 w-4" aria-hidden="true" />
+                                                            {t('downloadBtn')}
                                                         </a>
-                                                    )}
-                                                    <a
-                                                        href={`/api/download/${file.id}?token=${token}`}
-                                                        className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition shadow-sm"
-                                                    >
-                                                        <Download className="h-3.5 w-3.5" />
-                                                        <span>Download</span>
-                                                    </a>
-                                                </div>
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
-                            </div>
+                                                    </div>
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    )}
+                                </div>
+                            </section>
                         )}
 
-                        {/* File Upload View (receive / share) */}
+                        {/* File upload view (receive / share) */}
                         {showUploads && (
-                            <div className={`space-y-4 ${showDownloads ? 'lg:col-span-5' : 'lg:col-span-12'}`}>
-                                <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-                                    <UploadCloud className="h-5 w-5 text-slate-400" />
-                                    Upload Files
-                                </h2>
-                                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 shadow-sm">
-                                    {/* File Uploader component */}
-                                    <FileUploader
-                                        linkToken={token}
-                                        collectionId={link.contentCollectionId.toString()}
-                                        availableBytesToUpload={link.availableBytesToUpload}
-                                    />
+                            <section className={showDownloads ? 'lg:col-span-5' : 'lg:col-span-12'}>
+                                <div className="card overflow-hidden">
+                                    <h2 className="flex items-center gap-2 border-b border-slate-200 px-5 py-4 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:border-slate-800">
+                                        <UploadCloud className="h-4 w-4" aria-hidden="true" />
+                                        {t('uploadFiles')}
+                                    </h2>
+                                    <div className="p-4 sm:p-5">
+                                        <FileUploader
+                                            linkToken={token}
+                                            collectionId={link.contentCollectionId.toString()}
+                                            availableBytesToUpload={link.availableBytesToUpload}
+                                        />
+                                    </div>
                                 </div>
-                            </div>
+                            </section>
                         )}
 
                     </div>
-
-                </div>
+                </main>
             </div>
         </LinkRefreshWrapper>
     );

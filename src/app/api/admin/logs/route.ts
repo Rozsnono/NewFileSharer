@@ -8,7 +8,7 @@ export async function GET(request: Request) {
     await dbConnect();
     const cookieStore = await cookies();
     const session = cookieStore.get('admin_session')?.value;
-    if (!verifySession(session)) {
+    if (!(await verifySession(session))) {
         return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 

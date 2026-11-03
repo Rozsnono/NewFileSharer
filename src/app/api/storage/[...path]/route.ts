@@ -1,25 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 function getTargetBaseUrl(): string {
-    let url = (
+    // The Storage API serves HTTPS (valid certificate) on port 9443; plain HTTP is no longer
+    // available there, so the configured URL is used as-is (no http:// downgrade).
+    return (
         process.env.UPLOAD_API_URL ||
         process.env.NEXT_PUBLIC_UPLOAD_API_URL ||
-        'http://api.filesharer.rozsnorbert.hu:9443'
+        'https://api.filesharer.rozsnorbert.hu:9443'
     ).trim().replace(/\/+$/, '');
-
-    // Port 9443 on the Synology NAS runs plain HTTP. If configured with https://,
-    // normalize to http:// to prevent SSL protocol handshake failures.
-    if (url.includes(':9443') && url.startsWith('https://')) {
-        url = url.replace(/^https:\/\//, 'http://');
-    }
-
-    return url;
 }
 
+// No hardcoded fallback key: a missing key makes the Storage API answer 401 instead of
+// silently using a secret that lives in the source code.
 const UPLOAD_API_KEY =
     process.env.UPLOAD_API_KEY ||
     process.env.NEXT_PUBLIC_UPLOAD_API_KEY ||
-    'test-secret-key-12345';
+    '';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -30,7 +26,7 @@ async function handleProxy(request: NextRequest, { params }: { params: Promise<{
 
     const baseUrl = getTargetBaseUrl();
     const search = request.nextUrl.search;
-    let targetUrl = `${baseUrl}/${subPath}${search}`;
+    const targetUrl = `${baseUrl}/${subPath}${search}`;
 
     const forwardHeaders: Record<string, string> = {
         'x-api-key': UPLOAD_API_KEY,
@@ -64,18 +60,7 @@ async function handleProxy(request: NextRequest, { params }: { params: Promise<{
             return fetch(url, fetchOptions);
         };
 
-        let remoteResponse: Response;
-        try {
-            remoteResponse = await makeCall(targetUrl);
-        } catch (initialErr) {
-            // If failed on https, retry with http
-            if (targetUrl.startsWith('https://')) {
-                targetUrl = targetUrl.replace(/^https:\/\//, 'http://');
-                remoteResponse = await makeCall(targetUrl);
-            } else {
-                throw initialErr;
-            }
-        }
+        const remoteResponse = await makeCall(targetUrl);
 
         // Forward response headers back to client
         const responseHeaders = new Headers();

@@ -2,6 +2,7 @@
 
 import React, { useState, useRef } from 'react';
 import { Upload, File as FileIcon, X, CheckCircle2, Loader2, AlertCircle } from 'lucide-react';
+import { useI18n } from '@/components/I18nProvider';
 
 interface FileUploaderProps {
     linkToken: string;
@@ -19,8 +20,10 @@ interface UploadingFile {
     errorMessage?: string;
 }
 
-// 20MB chunk size: maximizes upload throughput directly to Synology NAS over HTTPS
-const CHUNK_SIZE = 20 * 1024 * 1024;
+// Fallback chunk size (20MB), used only when the Storage API does not return a size
+// recommendation. Normally the API's adaptive chunking decides (recommendedChunkSize at
+// /upload/start, then nextChunkSize after every chunk), clamped to its min/maxChunkSize.
+const FALLBACK_CHUNK_SIZE = 20 * 1024 * 1024;
 const UPLOAD_API_KEY = process.env.NEXT_PUBLIC_UPLOAD_API_KEY || '';
 
 /**
@@ -45,6 +48,7 @@ export default function FileUploader({
     availableBytesToUpload,
     onUploadSuccess,
 }: FileUploaderProps) {
+    const { t } = useI18n();
     const [dragActive, setDragActive] = useState(false);
     const [files, setFiles] = useState<UploadingFile[]>([]);
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -97,14 +101,15 @@ export default function FileUploader({
     };
 
     const uploadFile = async (file: File, clientFileId: string) => {
-        const totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
-        const targetPath = `/uploads/${collectionId}`;
+        // Relative path: the Storage API places it under its upload root (and under the folder
+        // of a folder-bound API key). Absolute paths must already be inside that root.
+        const targetPath = `uploads/${collectionId}`;
 
         // Check local upload limit
         if (file.size > availableBytesToUpload) {
             updateFileStatus(clientFileId, {
                 status: 'error',
-                errorMessage: 'File size exceeds available storage quota.',
+                errorMessage: t('quotaExceeded'),
             });
             return;
         }
@@ -122,10 +127,11 @@ export default function FileUploader({
                     'Content-Type': 'application/json',
                     'x-api-key': UPLOAD_API_KEY,
                 },
+                // fileSize enables the API's size-based (adaptive) chunk recommendation.
+                // The final chunk count is only known at the end, so none is announced here.
                 body: JSON.stringify({
                     filename: file.name,
-                    totalChunks,
-                    chunkSize: CHUNK_SIZE,
+                    fileSize: file.size,
                     targetPath,
                 }),
             });
@@ -138,21 +144,30 @@ export default function FileUploader({
             const startData = await startResponse.json();
             remoteUploadId = startData.uploadId;
 
-            // 2. Upload Chunks sequentially with retry mechanism
-            for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
-                const start = chunkIndex * CHUNK_SIZE;
-                const end = Math.min(start + CHUNK_SIZE, file.size);
-                const chunkBlob = file.slice(start, end);
+            const minChunkSize: number = startData.minChunkSize || 1024 * 1024;
+            const maxChunkSize: number = startData.maxChunkSize || FALLBACK_CHUNK_SIZE;
+            const clampChunkSize = (size: number) => Math.min(Math.max(size, minChunkSize), maxChunkSize);
+
+            let chunkSize = clampChunkSize(startData.recommendedChunkSize || FALLBACK_CHUNK_SIZE);
+            let offset = 0;
+            let totalChunks = 0;
+
+            // 2. Upload chunks sequentially (adaptive size) with retry mechanism.
+            // `do…while` so an empty file still sends one (empty) chunk, as before.
+            do {
+                const chunkIndex = totalChunks;
+                const end = Math.min(offset + chunkSize, file.size);
+                const chunkBlob = file.slice(offset, end);
 
                 const formData = new FormData();
                 formData.append('file', chunkBlob, file.name);
                 formData.append('uploadId', remoteUploadId!);
                 formData.append('chunkIndex', chunkIndex.toString());
-                formData.append('totalChunks', totalChunks.toString());
                 formData.append('filename', file.name);
 
                 let chunkUploaded = false;
                 let chunkError = '';
+                let nextChunkSize: number | undefined;
 
                 // Try uploading chunk up to 3 times
                 for (let attempt = 1; attempt <= 3; attempt++) {
@@ -166,6 +181,9 @@ export default function FileUploader({
                         });
 
                         if (chunkResponse.ok) {
+                            // The API suggests the size of the next chunk based on measured speed.
+                            const chunkData = await chunkResponse.json().catch(() => ({}));
+                            nextChunkSize = chunkData.nextChunkSize;
                             chunkUploaded = true;
                             break;
                         } else {
@@ -183,13 +201,19 @@ export default function FileUploader({
                 }
 
                 if (!chunkUploaded) {
-                    throw new Error(`Failed uploading chunk ${chunkIndex + 1}/${totalChunks}: ${chunkError}`);
+                    throw new Error(`Failed uploading chunk ${chunkIndex + 1}: ${chunkError}`);
                 }
 
-                // Progress calculated smoothly up to 90%
-                const percent = Math.round(((chunkIndex + 1) / totalChunks) * 90);
+                offset = end;
+                totalChunks += 1;
+                if (nextChunkSize) {
+                    chunkSize = clampChunkSize(nextChunkSize);
+                }
+
+                // Progress (by bytes) calculated smoothly up to 90%
+                const percent = file.size > 0 ? Math.round((offset / file.size) * 90) : 90;
                 updateFileStatus(clientFileId, { progress: percent });
-            }
+            } while (offset < file.size);
 
             // 3. Finalize & Stream Merge on WebDAV
             updateFileStatus(clientFileId, { status: 'finalizing', progress: 95 });
@@ -214,7 +238,7 @@ export default function FileUploader({
             }
 
             const finishData = await finishResponse.json();
-            const destinationPath = finishData.destination || `${targetPath}/${file.name}`;
+            const destinationPath = finishData.destination || `/${targetPath}/${file.name}`;
 
             // 4. Record file metadata in Next.js MongoDB & deduct quota
             const recordResponse = await fetch('/api/upload/record', {
@@ -285,18 +309,18 @@ export default function FileUploader({
     };
 
     return (
-        <div className="w-full max-w-xl mx-auto space-y-6">
-            {/* Dropzone Area */}
+        <div className="w-full space-y-5">
+            {/* Dropzone area */}
             <div
                 onDragEnter={handleDrag}
                 onDragOver={handleDrag}
                 onDragLeave={handleDrag}
                 onDrop={handleDrop}
                 onClick={() => fileInputRef.current?.click()}
-                className={`relative flex flex-col items-center justify-center border-2 border-dashed rounded-lg p-8 cursor-pointer transition-colors duration-200 ${
+                className={`relative flex cursor-pointer flex-col items-center justify-center rounded-[14px] border-2 border-dashed px-4 py-8 text-center transition-colors duration-200 ${
                     dragActive
-                        ? 'border-blue-500 bg-blue-50/50 dark:bg-blue-950/20'
-                        : 'border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50 hover:bg-slate-100 dark:hover:bg-slate-900'
+                        ? 'border-blue-600 bg-blue-50 dark:bg-blue-950/30'
+                        : 'border-blue-300 bg-blue-50/40 hover:bg-blue-50 dark:border-blue-900 dark:bg-slate-900/50 dark:hover:bg-slate-900'
                 }`}
             >
                 <input
@@ -306,62 +330,63 @@ export default function FileUploader({
                     className="hidden"
                     onChange={handleFileInput}
                 />
-                <Upload className="h-10 w-10 text-slate-400 mb-3" />
-                <p className="text-sm font-medium text-slate-700 dark:text-slate-300 text-center">
-                    Drag and drop your files here, or <span className="text-blue-500 underline">browse</span>
+                <span className="mb-3 flex h-12 w-12 items-center justify-center rounded-[14px] bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300">
+                    <Upload className="h-6 w-6" aria-hidden="true" />
+                </span>
+                <p className="text-[15px] font-semibold text-slate-800 dark:text-slate-200">
+                    {t('dropText')} <span className="text-blue-600 underline dark:text-blue-400">{t('browse')}</span>
                 </p>
-                <p className="text-xs text-slate-500 mt-1 text-center">
-                    Files are uploaded directly to fast storage. Max limit per file: {formatBytes(availableBytesToUpload)}.
+                <p className="mt-1 text-sm text-slate-500">
+                    {t('uploadHint', { max: formatBytes(availableBytesToUpload) })}
                 </p>
             </div>
 
-            {/* File List / Progress Tracking */}
+            {/* File list / progress tracking */}
             {files.length > 0 && (
-                <div className="border border-slate-200 dark:border-slate-800 rounded-lg p-4 bg-white dark:bg-slate-950 divide-y divide-slate-100 dark:divide-slate-900">
-                    <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-3">Upload Queue</h3>
-                    <div className="space-y-4 pt-3">
+                <div className="space-y-1">
+                    <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">{t('uploadQueue')}</h3>
+                    <ul className="divide-y divide-slate-200 dark:divide-slate-800">
                         {files.map((file) => (
-                            <div key={file.id} className="space-y-2">
+                            <li key={file.id} className="space-y-2 py-3">
                                 <div className="flex items-start justify-between gap-3">
-                                    <div className="flex items-center gap-2">
-                                        <FileIcon className="h-5 w-5 text-slate-400 shrink-0" />
-                                        <div>
-                                            <p className="text-sm font-medium text-slate-900 dark:text-slate-100 line-clamp-1">
-                                                {file.name}
-                                            </p>
-                                            <p className="text-xs text-slate-500">{formatBytes(file.size)}</p>
+                                    <div className="flex min-w-0 items-center gap-2.5">
+                                        <FileIcon className="h-5 w-5 shrink-0 text-slate-400" aria-hidden="true" />
+                                        <div className="min-w-0">
+                                            <p className="truncate text-[15px] font-semibold">{file.name}</p>
+                                            <p className="text-sm text-slate-500">{formatBytes(file.size)}</p>
                                         </div>
                                     </div>
 
-                                    {/* Status Indicator / Actions */}
-                                    <div className="flex items-center gap-2 shrink-0">
+                                    {/* Status indicator / actions */}
+                                    <div className="flex shrink-0 items-center gap-1">
                                         {file.status === 'uploading' && (
-                                            <span className="text-xs text-blue-500 flex items-center gap-1">
-                                                <Loader2 className="h-3 w-3 animate-spin" /> Uploading {file.progress}%
+                                            <span className="badge badge-info">
+                                                <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" /> {t('uploading', { p: file.progress })}
                                             </span>
                                         )}
                                         {file.status === 'finalizing' && (
-                                            <span className="text-xs text-yellow-600 flex items-center gap-1">
-                                                <Loader2 className="h-3 w-3 animate-spin" /> Finalizing on WebDAV...
+                                            <span className="badge badge-warning">
+                                                <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" /> {t('finalizing')}
                                             </span>
                                         )}
                                         {file.status === 'completed' && (
-                                            <span className="text-xs text-emerald-600 flex items-center gap-1 font-medium">
-                                                <CheckCircle2 className="h-4 w-4" /> Ready
+                                            <span className="badge badge-success">
+                                                <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" /> {t('ready')}
                                             </span>
                                         )}
                                         {file.status === 'error' && (
-                                            <span className="text-xs text-red-500 flex items-center gap-1 font-medium">
-                                                <AlertCircle className="h-4 w-4" /> Error
+                                            <span className="badge badge-danger">
+                                                <AlertCircle className="h-3.5 w-3.5" aria-hidden="true" /> {t('errorLabel')}
                                             </span>
                                         )}
 
                                         <button
                                             onClick={() => removeFileRecord(file.id)}
                                             disabled={file.status === 'uploading' || file.status === 'finalizing'}
-                                            className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 rounded disabled:opacity-50"
+                                            aria-label={t('remove')}
+                                            className="flex h-9 w-9 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 disabled:opacity-40 dark:hover:bg-slate-800 dark:hover:text-slate-200"
                                         >
-                                            <X className="h-4 w-4" />
+                                            <X className="h-4 w-4" aria-hidden="true" />
                                         </button>
                                     </div>
                                 </div>
@@ -369,28 +394,28 @@ export default function FileUploader({
                                 {/* Progress bar */}
                                 {file.status !== 'idle' && (
                                     <div className="space-y-1">
-                                        <div className="w-full bg-slate-100 dark:bg-slate-800 h-1.5 rounded-full overflow-hidden">
+                                        <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
                                             <div
                                                 style={{ width: `${file.progress}%` }}
-                                                className={`h-full transition-all duration-300 rounded-full ${
+                                                className={`h-full rounded-full transition-all duration-300 ${
                                                     file.status === 'error'
                                                         ? 'bg-red-500'
                                                         : file.status === 'finalizing'
-                                                            ? 'bg-yellow-500'
+                                                            ? 'bg-amber-500'
                                                             : file.status === 'completed'
-                                                                ? 'bg-emerald-500'
-                                                                : 'bg-blue-500'
+                                                                ? 'bg-green-600'
+                                                                : 'bg-blue-600'
                                                 }`}
                                             />
                                         </div>
                                         {file.errorMessage && (
-                                            <p className="text-xs text-red-500 mt-1">{file.errorMessage}</p>
+                                            <p role="alert" className="text-sm text-red-600 dark:text-red-400">{file.errorMessage}</p>
                                         )}
                                     </div>
                                 )}
-                            </div>
+                            </li>
                         ))}
-                    </div>
+                    </ul>
                 </div>
             )}
         </div>

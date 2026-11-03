@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import dbConnect from '@/lib/dbConnect';
 import { findLinkByToken } from '@/lib/authHelper';
+import { isPubliclyReachable } from '@/lib/publicAccess';
 import { buildDirectDownloadUrl, getStorageApiKey } from '@/lib/storageApi';
 import Content from '@/models/Content';
 import ContentCollection from '@/models/ContentCollection';
@@ -30,11 +31,8 @@ export async function GET(request: Request, { params }: RouteParams) {
         }
 
         const collection = file.contentCollectionId as any;
-        const isCurrentlyPublic =
-            collection &&
-            collection.isPublic &&
-            collection.publicExpiresAt &&
-            new Date(collection.publicExpiresAt) > new Date();
+        // Public when the collection or any of its ancestors is public (subfolders inherit visibility).
+        const isCurrentlyPublic = collection ? await isPubliclyReachable(collection._id.toString()) : false;
 
         // 2. If collection is not public, require and validate token
         if (!isCurrentlyPublic) {

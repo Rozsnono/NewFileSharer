@@ -2,9 +2,12 @@
 
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Lock, Loader2, ShieldCheck } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
+import { useI18n } from '@/components/I18nProvider';
+import LanguageSwitcher from '@/components/LanguageSwitcher';
 
 export default function AdminLoginPage() {
+    const { t } = useI18n();
     const [password, setPassword] = useState('');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
@@ -23,8 +26,9 @@ export default function AdminLoginPage() {
             });
 
             if (!res.ok) {
-                const data = await res.json();
-                throw new Error(data.error || 'Login rejected.');
+                // Show a translated message for the common rejection; keep other server errors as is.
+                const data = await res.json().catch(() => ({}));
+                throw new Error(res.status === 401 ? t('loginRejected') : data.error || t('loginRejected'));
             }
 
             router.push('/admin');
@@ -36,35 +40,43 @@ export default function AdminLoginPage() {
     };
 
     return (
-        <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950 p-4">
-            <div className="max-w-md w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-8 shadow-sm space-y-6">
-                <div className="text-center space-y-2">
-                    <ShieldCheck className="h-10 w-10 text-blue-500 mx-auto animate-pulse" />
-                    <h1 className="text-xl font-bold text-slate-900 dark:text-slate-50">Admin Authentication</h1>
-                    <p className="text-xs text-slate-500">Provide the master password configured in your environment.</p>
+        <div className="flex min-h-screen items-center justify-center p-4">
+            <div className="absolute right-4 top-4">
+                <LanguageSwitcher />
+            </div>
+
+            <div className="card w-full max-w-md space-y-5 p-8">
+                <div className="flex items-center gap-2.5 text-base font-semibold">
+                    <span aria-hidden="true" className="h-8 w-8 rounded-[9px] bg-accent" />
+                    {t('appName')}
+                </div>
+
+                <div>
+                    <h1 className="text-2xl font-bold tracking-tight">{t('loginTitle')}</h1>
+                    <p className="mt-1.5 text-[15px] text-slate-600 dark:text-slate-400">{t('loginSubtitle')}</p>
                 </div>
 
                 <form onSubmit={handleLogin} className="space-y-4">
-                    <div className="relative">
-                        <Lock className="absolute left-3 top-3.5 h-4 w-4 text-slate-400" />
+                    <label className="flex flex-col gap-1.5 text-sm font-semibold text-slate-700 dark:text-slate-300">
+                        {t('password')}
                         <input
                             type="password"
-                            placeholder="Master Password"
                             value={password}
                             onChange={(e) => setPassword(e.target.value)}
-                            className="w-full pl-9 pr-4 py-2.5 border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-sm rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            className="input"
+                            autoComplete="current-password"
                             required
                         />
-                    </div>
+                    </label>
 
-                    {error && <p className="text-xs text-red-500">{error}</p>}
+                    {error && (
+                        <p role="alert" className="rounded-[10px] bg-red-100 px-3.5 py-3 text-sm text-red-800 dark:bg-red-950 dark:text-red-300">
+                            {error}
+                        </p>
+                    )}
 
-                    <button
-                        type="submit"
-                        disabled={loading}
-                        className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white py-2.5 rounded-lg text-sm font-semibold transition disabled:opacity-50"
-                    >
-                        {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Sign In'}
+                    <button type="submit" disabled={loading} className="btn btn-primary w-full">
+                        {loading ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : t('signIn')}
                     </button>
                 </form>
             </div>
